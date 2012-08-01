@@ -1,0 +1,7 @@
+*.la
+*.o
+*.lo
+*.slo
+test/error.log
+test/httpd.pid
+.libs
