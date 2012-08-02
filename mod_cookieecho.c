@@ -47,7 +47,7 @@
 #define COOKIE_DISABLE_IF_DNT 1
 #define COOKIE_DOMAIN ".krxd.net"
 
-module AP_MODULE_DECLARE_DATA cookieecho_module;
+module AP_MODULE_DECLARE_DATA querystring2cookie_module;
 
 // See here for the structure of request_rec:
 // http://ci.apache.org/projects/httpd/trunk/doxygen/structrequest__rec.html
@@ -144,13 +144,13 @@ static void register_hooks(apr_pool_t *p)
 }
 
 
-module AP_MODULE_DECLARE_DATA cookieecho_module = {
+module AP_MODULE_DECLARE_DATA querystring2cookie_module = {
     STANDARD20_MODULE_STUFF,
-    NULL, //make_cookieecho_settings,  /* dir config creater */
+    NULL, //make_querystring2cookie_settings,  /* dir config creater */
     NULL,                       /* dir merger --- default is to override */
     NULL,                       /* server config */
     NULL,                       /* merge server configs */
-    NULL, //cookieecho_cmds,           /* command apr_table_t */
+    NULL, //querystring2cookie_cmds,           /* command apr_table_t */
     register_hooks              /* register hooks */
 };
 
