@@ -55,46 +55,6 @@ static int hook(request_rec *r)
 {
     _DEBUG && fprintf( stderr, "Query string: %s\n", r->args );
 
-    // The final cookie will be stored in this:
-    char *cookie = "";
-
-    // ***********************************
-    // Find key/value pairs
-    // ***********************************
-
-    // Iterate over the key/value pairs
-    char *last_pair;
-    char *pair = apr_strtok( apr_pstrdup( r->pool, r->args ), "&", &last_pair );
-
-    while( pair != NULL ) {
-
-        // Does not contains a =, meaning it's garbage
-        if( !strchr( pair, '=' ) ) {
-            _DEBUG && fprintf( stderr, "invalid pair: %s\n", pair );
-
-        // looks like a valid key=value declaration
-        } else {
-
-            _DEBUG && fprintf( stderr, "pair: %s\n", pair );
-
-            // Make sure the whole thing doesn't get too long
-            if( strlen(cookie) +
-                strlen(COOKIE_KEY_PREFIX) +
-                strlen(pair) < COOKIE_MAX_SIZE
-            ) {
-
-                // And append it to the existing cookie
-                cookie = apr_pstrcat(
-                            r->pool,
-                            cookie, COOKIE_KEY_PREFIX, pair, "; ", NULL );
-            }
-        }
-
-        // And get the next pair
-        pair = apr_strtok( NULL, "&", &last_pair );
-
-    }
-
     // ***********************************
     // Calculate expiry time
     // ***********************************
@@ -115,22 +75,69 @@ static int hook(request_rec *r)
                     );
 
     // ***********************************
-    // Build the final cookie
+    // Find key/value pairs
     // ***********************************
-    cookie = apr_pstrcat( r->pool,
-                    cookie,
-                    "path=/; ",
-                    "domain=", COOKIE_DOMAIN, "; ",
-                    expires,
-                    NULL
-                );
 
-    _DEBUG && fprintf( stderr, "cookie: %s\n", cookie );
+    // keep track of how much data we've been writing - there's a limit to how
+    // much a browser will store per domain (usually 4k) so we want to make sure
+    // it's not getting flooded.
+    int total_pair_size = 0;
 
-    // r->err_headers_out also honors non-2xx responses and
-    // internal redirects. See the patch here:
-    // http://svn.apache.org/viewvc?view=revision&revision=1154620
-    apr_table_addn( r->err_headers_out, "Set-Cookie", cookie );
+    // Iterate over the key/value pairs
+    char *last_pair;
+    char *pair = apr_strtok( apr_pstrdup( r->pool, r->args ), "&", &last_pair );
+
+    // we need to build a Set-Cookie for EVERY pair - it is not supported to
+    // send more than one key=val pair per set-cookie :(
+    while( pair != NULL ) {
+
+        // Does not contains a =, meaning it's garbage
+        if( !strchr( pair, '=' ) ) {
+            _DEBUG && fprintf( stderr, "invalid pair: %s\n", pair );
+
+        // looks like a valid key=value declaration
+        } else {
+
+            _DEBUG && fprintf( stderr, "pair: %s\n", pair );
+
+            int this_pair_size = strlen( COOKIE_KEY_PREFIX ) + strlen( pair );
+
+            // Make sure the individual pair, as well as the whole thing doesn't
+            // get too long
+            if( (this_pair_size < COOKIE_MAX_SIZE) &&
+                (total_pair_size + this_pair_size < COOKIE_MAX_SIZE)
+            ) {
+
+                // update the book keeping
+                total_pair_size += this_pair_size;
+
+                // And append it to the existing cookie
+                char *cookie = apr_pstrcat( r->pool,
+                                    COOKIE_KEY_PREFIX, pair, "; ",
+                                    "path=/; ",
+                                    "domain=", COOKIE_DOMAIN, "; ",
+                                    expires,
+                                    NULL
+                                );
+
+                // r->err_headers_out also honors non-2xx responses and
+                // internal redirects. See the patch here:
+                // http://svn.apache.org/viewvc?view=revision&revision=1154620
+                apr_table_addn( r->err_headers_out, "Set-Cookie", cookie );
+
+                _DEBUG && fprintf( stderr, "cookie: %s\n", cookie );
+
+            } else {
+                _DEBUG && fprintf( stderr,
+                    "Pair size too long to add: %s (this: %i total: %i max: %i)\n",
+                    pair, this_pair_size, total_pair_size, COOKIE_MAX_SIZE );
+            }
+        }
+
+        // And get the next pair
+        pair = apr_strtok( NULL, "&", &last_pair );
+
+    }
 
     return OK;
 }
