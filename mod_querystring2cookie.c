@@ -52,20 +52,31 @@ typedef struct {
                             // query string keys that will not be set in the cookie
 } settings_rec;
 
-
-// XXX config values
-#define COOKIE_EXPIRES 86400
-#define COOKIE_KEY_PREFIX "kxe_"
-#define COOKIE_MAX_SIZE 1024
-#define COOKIE_DISABLE_IF_DNT 1
-#define COOKIE_DOMAIN ".krxd.net"
-
 module AP_MODULE_DECLARE_DATA querystring2cookie_module;
 
 // See here for the structure of request_rec:
 // http://ci.apache.org/projects/httpd/trunk/doxygen/structrequest__rec.html
 static int hook(request_rec *r)
 {
+    settings_rec *cfg = ap_get_module_config( r->per_dir_config,
+                                              &querystring2cookie_module );
+
+    /* Do not run in subrequests, don't run if not enabled */
+    if( !(cfg->enabled || r->main) ) {
+        return DECLINED;
+    }
+
+    /* No query string? nothing to do here */
+    if( !(r->args || (strlen( r->args ) < 1)) ) {
+        return DECLINED;
+    }
+
+    /* skip if dnt headers are present? */
+    if( !(cfg->enabled_if_dnt) && apr_table_get( r->headers_in, "DNT" ) ) {
+        _DEBUG && fprintf( stderr, "DNT header sent: declined\n" );
+        return DECLINED;
+    }
+
     _DEBUG && fprintf( stderr, "Query string: %s\n", r->args );
 
     // ***********************************
@@ -76,7 +87,7 @@ static int hook(request_rec *r)
     // support it :(
     apr_time_exp_t tms;
     apr_time_exp_gmt( &tms, r->request_time
-                         + apr_time_from_sec( COOKIE_EXPIRES ) );
+                         + apr_time_from_sec( cfg->cookie_expires ) );
 
     // XXX add if cfg->expires
     char *expires = apr_psprintf( r->pool,
@@ -87,6 +98,15 @@ static int hook(request_rec *r)
                         tms.tm_year % 100,
                         tms.tm_hour, tms.tm_min, tms.tm_sec
                     );
+
+    // ***********************************
+    // Domain to set the cookie in
+    // ***********************************
+
+    // If empty, the browser assign the domain the object was requested from
+    char *domain = strlen( cfg->cookie_domain )
+                    ? apr_pstrcat( r->pool, "domain=", cfg->cookie_domain, "; ", NULL )
+                    : "";
 
     // ***********************************
     // Find key/value pairs
@@ -105,52 +125,104 @@ static int hook(request_rec *r)
     // send more than one key=val pair per set-cookie :(
     while( pair != NULL ) {
 
-        // Does not contains a =, meaning it's garbage
-        if( !strchr( pair, '=' ) ) {
+        // length of the substr before the = sign (or index of the = sign)
+        int contains_equals_at = strcspn( pair, "=" );
+
+        // Does not contains a =, or starts with a =, meaning it's garbage
+        if( !strstr(pair, "=") || contains_equals_at < 1 ) {
             _DEBUG && fprintf( stderr, "invalid pair: %s\n", pair );
 
-        // looks like a valid key=value declaration
+            // And get the next pair -- has to be done at every break
+            pair = apr_strtok( NULL, "&", &last_pair );
+            continue;
+
+        // may be on the ignore list
         } else {
 
-            _DEBUG && fprintf( stderr, "pair: %s\n", pair );
+            // may have to continue the outer loop, use this as a marker
+            int do_continue = 0;
 
-            int this_pair_size = strlen( COOKIE_KEY_PREFIX ) + strlen( pair );
+            // you might have blacklisted this key; let's check
+            // Following tutorial code here again:
+            // http://dev.ariel-networks.com/apr/apr-tutorial/html/apr-tutorial-19.html
 
-            // Make sure the individual pair, as well as the whole thing doesn't
-            // get too long
-            if( (this_pair_size < COOKIE_MAX_SIZE) &&
-                (total_pair_size + this_pair_size < COOKIE_MAX_SIZE)
-            ) {
+            int i;
+            for( i = 0; i < cfg->qs_ignore->nelts; i++ ) {
 
-                // update the book keeping
-                total_pair_size += this_pair_size;
+                char *ignore = ((char **)cfg->qs_ignore->elts)[i];
 
-                // And append it to the existing cookie
-                char *cookie = apr_pstrcat( r->pool,
-                                    COOKIE_KEY_PREFIX, pair, "; ",
-                                    "path=/; ",
-                                    "domain=", COOKIE_DOMAIN, "; ",
-                                    expires,
-                                    NULL
-                                );
+                _DEBUG && fprintf( stderr, "processing ignore %s against pair %s\n",
+                                        ignore, pair );
 
-                // r->err_headers_out also honors non-2xx responses and
-                // internal redirects. See the patch here:
-                // http://svn.apache.org/viewvc?view=revision&revision=1154620
-                apr_table_addn( r->err_headers_out, "Set-Cookie", cookie );
+                // it's indeed on the ignore list; move on
+                // do this by comparing the string length first - if the length of
+                // the ignore key and the key are identical AND the first N characters
+                // of the string are the same
 
-                _DEBUG && fprintf( stderr, "cookie: %s\n", cookie );
+                _DEBUG && fprintf( stderr, "strlen ignore: %i, =: %i\n",
+                        strlen(ignore ), contains_equals_at );
 
-            } else {
-                _DEBUG && fprintf( stderr,
-                    "Pair size too long to add: %s (this: %i total: %i max: %i)\n",
-                    pair, this_pair_size, total_pair_size, COOKIE_MAX_SIZE );
+                if( strlen( ignore ) == contains_equals_at &&
+                    strncasecmp( pair, ignore, contains_equals_at ) == 0
+                ) {
+                    _DEBUG && fprintf( stderr, "pair %s is on the ignore list: %s\n",
+                                        pair, ignore );
+
+                    // signal to continue the outer loop; we found an ignore match
+                    do_continue = 1;
+                    break;
+
+                }
             }
+
+            // match found, move on
+            if( do_continue ) {
+                // And get the next pair -- has to be done at every break
+                pair = apr_strtok( NULL, "&", &last_pair );
+
+                continue;
+            }
+
         }
 
-        // And get the next pair
-        pair = apr_strtok( NULL, "&", &last_pair );
+        // looks like a valid key=value declaration
+        _DEBUG && fprintf( stderr, "pair: %s\n", pair );
 
+        int this_pair_size = strlen( cfg->cookie_prefix ) + strlen( pair );
+
+        // Make sure the individual pair, as well as the whole thing doesn't
+        // get too long
+        if( (this_pair_size <= cfg->cookie_max_size) &&
+            (total_pair_size + this_pair_size <= cfg->cookie_max_size)
+        ) {
+
+            // update the book keeping
+            total_pair_size += this_pair_size;
+
+            // And append it to the existing cookie
+            char *cookie = apr_pstrcat( r->pool,
+                                cfg->cookie_prefix, pair, "; ",
+                                "path=/; ",
+                                domain,
+                                expires,
+                                NULL
+                            );
+
+            // r->err_headers_out also honors non-2xx responses and
+            // internal redirects. See the patch here:
+            // http://svn.apache.org/viewvc?view=revision&revision=1154620
+            apr_table_addn( r->err_headers_out, "Set-Cookie", cookie );
+
+            _DEBUG && fprintf( stderr, "cookie: %s\n", cookie );
+
+        } else {
+            _DEBUG && fprintf( stderr,
+                "Pair size too long to add: %s (this: %i total: %i max: %i)\n",
+                pair, this_pair_size, total_pair_size, cfg->cookie_max_size );
+        }
+
+        // and move the pointer
+        pair = apr_strtok( NULL, "&", &last_pair );
     }
 
     return OK;
@@ -170,10 +242,10 @@ static void *init_settings(apr_pool_t *p, char *d)
     cfg = (settings_rec *) apr_pcalloc(p, sizeof(settings_rec));
     cfg->enabled           = 0;
     cfg->enabled_if_dnt    = 0;
-    cfg->cookie_expires    = 0;
+    cfg->cookie_expires    = 86400; // a day
     cfg->cookie_max_size   = 1024;
-    cfg->cookie_domain     = NULL;
-    cfg->cookie_prefix     = NULL;
+    cfg->cookie_domain     = "";    // used in apr_pstrcat - can't be null
+    cfg->cookie_prefix     = "";    // used in apr_pstrcat - can't be null
     cfg->qs_ignore         = apr_array_make(p, 2, sizeof(const char*) );
 
     return cfg;
