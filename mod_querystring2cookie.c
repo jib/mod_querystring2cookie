@@ -40,6 +40,19 @@
 #define _DEBUG 0
 #endif
 
+// module configuration - this is basically a global struct
+typedef struct {
+    int enabled;            // module enabled?
+    int enabled_if_dnt;     // module enabled for requests with X-DNT?
+    int cookie_expires;     // holds the expires value for the cookie
+    int cookie_max_size;    // maximum size of all the key/value pairs
+    char *cookie_domain;    // domain the cookie will be set in
+    char *cookie_prefix;    // prefix all keys in the cookie with this string
+    apr_array_header_t *qs_ignore;
+                            // query string keys that will not be set in the cookie
+} settings_rec;
+
+
 // XXX config values
 #define COOKIE_EXPIRES 86400
 #define COOKIE_KEY_PREFIX "kxe_"
@@ -65,6 +78,7 @@ static int hook(request_rec *r)
     apr_time_exp_gmt( &tms, r->request_time
                          + apr_time_from_sec( COOKIE_EXPIRES ) );
 
+    // XXX add if cfg->expires
     char *expires = apr_psprintf( r->pool,
                         "expires=%s, %.2d-%s-%.2d %.2d:%.2d:%.2d GMT",
                         apr_day_snames[tms.tm_wday],
@@ -142,6 +156,169 @@ static int hook(request_rec *r)
     return OK;
 }
 
+/* ********************************************
+
+    Default settings
+
+   ******************************************** */
+
+/* initialize all attributes */
+static void *init_settings(apr_pool_t *p, char *d)
+{
+    settings_rec *cfg;
+
+    cfg = (settings_rec *) apr_pcalloc(p, sizeof(settings_rec));
+    cfg->enabled           = 0;
+    cfg->enabled_if_dnt    = 0;
+    cfg->cookie_expires    = 0;
+    cfg->cookie_max_size   = 1024;
+    cfg->cookie_domain     = NULL;
+    cfg->cookie_prefix     = NULL;
+    cfg->qs_ignore         = apr_array_make(p, 2, sizeof(const char*) );
+
+    return cfg;
+}
+
+
+/* ********************************************
+
+    Parsing configuration options
+
+   ******************************************** */
+
+/* Set the value of a config variabe, strings only */
+static const char *set_config_value(cmd_parms *cmd, void *mconfig,
+                                    const char *value)
+{
+    settings_rec *cfg;
+
+    cfg = (settings_rec *) mconfig;
+
+    char name[50];
+    sprintf( name, "%s", cmd->cmd->name );
+
+    /*
+     * Apply restrictions on attributes.
+     */
+    if( strlen(value) == 0 ) {
+        return apr_psprintf(cmd->pool, "%s not allowed to be NULL", name);
+    }
+
+
+    /* Domain to set the cookie in */
+    if( strcasecmp(name, "QS2CookieDomain") == 0 ) {
+
+        if( value[0] != '.' ) {
+            return "QS2CookieDomain values must begin with a dot";
+        }
+
+        if( ap_strchr_c( &value[1], '.' ) == NULL ) {
+            return "QS2CookieDomain values must contain at least one embedded dot";
+        }
+
+        cfg->cookie_domain = apr_pstrdup(cmd->pool, value);
+
+    /* Prefix for all keys set in the cookie */
+    } else if( strcasecmp(name, "QS2CookiePrefix") == 0 ) {
+        cfg->cookie_prefix     = apr_pstrdup(cmd->pool, value);
+
+
+    /* Maximum size of all the key/value pairs */
+    } else if( strcasecmp(name, "QS2CookieMaxSize") == 0 ) {
+
+        // this has to be a number
+        if( apr_isdigit(*value) && apr_isdigit(value[strlen(value) - 1]) ) {
+            cfg->cookie_max_size   = atol(apr_pstrdup(cmd->pool, value));
+        } else {
+            return apr_psprintf(cmd->pool,
+                "Variable %s must be a number, not %s", name, value);
+        }
+
+    /* Expiry time, in seconds after the request */
+    } else if( strcasecmp(name, "QS2CookieExpires") == 0 ) {
+
+        // this has to be a number
+        if( apr_isdigit(*value) && apr_isdigit(value[strlen(value) - 1]) ) {
+            cfg->cookie_expires = atol(apr_pstrdup(cmd->pool, value));
+        } else {
+            return apr_psprintf(cmd->pool,
+                "Variable %s must be a number, not %s", name, value);
+        }
+
+    /* all the keys that will not be put into the cookie */
+    } else if( strcasecmp(name, "QS2CookieIgnore") == 0 ) {
+
+        // following tutorial here:
+        // http://dev.ariel-networks.com/apr/apr-tutorial/html/apr-tutorial-19.html
+        const char *str                                = apr_pstrdup(cmd->pool, value);
+        *(const char**)apr_array_push(cfg->qs_ignore) = str;
+
+        _DEBUG && fprintf( stderr, "qs ignore = %s\n", str );
+
+        char *ary = apr_array_pstrcat( cmd->pool, cfg->qs_ignore, '-' );
+        _DEBUG && fprintf( stderr, "qs ignore as str = %s\n", ary );
+
+    } else {
+        return apr_psprintf(cmd->pool, "No such variable %s", name);
+    }
+
+    return NULL;
+}
+
+/* Set the value of a config variabe, ints/booleans only */
+static const char *set_config_enable(cmd_parms *cmd, void *mconfig,
+                                    int value)
+{
+    settings_rec *cfg;
+
+    cfg = (settings_rec *) mconfig;
+
+    char name[50];
+    sprintf( name, "%s", cmd->cmd->name );
+
+    if( strcasecmp(name, "QS2Cookie") == 0 ) {
+        cfg->enabled           = value;
+
+    } else if( strcasecmp(name, "QS2CookieEnableIfDNT") == 0 ) {
+        cfg->enabled_if_dnt    = value;
+
+    } else {
+        return apr_psprintf(cmd->pool, "No such variable %s", name);
+    }
+
+    return NULL;
+}
+
+/* ********************************************
+
+    Configuration options
+
+   ******************************************** */
+
+static const command_rec commands[] = {
+    AP_INIT_FLAG( "QS2Cookie",              set_config_enable,  NULL, OR_FILEINFO,
+                  "whether or not to enable querystring to cookie module"),
+    AP_INIT_TAKE1("QS2CookieExpires",       set_config_value,   NULL, OR_FILEINFO,
+                  "expiry time for the cookie, in seconds after the request is served"),
+    AP_INIT_TAKE1("QS2CookieDomain",        set_config_value,   NULL, OR_FILEINFO,
+                  "domain to which this cookie applies"),
+    AP_INIT_TAKE1("QS2CookieMaxSize",       set_config_value,   NULL, OR_FILEINFO,
+                  "maximum size to allow for all the key/value pairs in this request"),
+    AP_INIT_TAKE1("QS2CookiePrefix",        set_config_value,   NULL, OR_FILEINFO,
+                  "prefix all cookie keys with this string"),
+    AP_INIT_FLAG( "QS2CookieEnableIfDNT",  set_config_enable,  NULL, OR_FILEINFO,
+                  "whether or not to enable cookies if 'X-DNT' header is present"),
+    AP_INIT_ITERATE( "QS2CookieIgnore",     set_config_value,   NULL, OR_FILEINFO,
+                  "list of query string keys that will not be set in the cookie" ),
+    {NULL}
+};
+
+/* ********************************************
+
+    Register module to Apache
+
+   ******************************************** */
+
 static void register_hooks(apr_pool_t *p)
 {   /* code gets skipped if modules return a status code from
        their fixup hooks, so be sure to run REALLY first. See:
@@ -153,11 +330,11 @@ static void register_hooks(apr_pool_t *p)
 
 module AP_MODULE_DECLARE_DATA querystring2cookie_module = {
     STANDARD20_MODULE_STUFF,
-    NULL, //make_querystring2cookie_settings,  /* dir config creater */
+    init_settings,              /* dir config creater */
     NULL,                       /* dir merger --- default is to override */
     NULL,                       /* server config */
     NULL,                       /* merge server configs */
-    NULL, //querystring2cookie_cmds,           /* command apr_table_t */
+    commands,                   /* command apr_table_t */
     register_hooks              /* register hooks */
 };
 
