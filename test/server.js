@@ -9,7 +9,7 @@ http.createServer(function(request, response) {
 
   // different response code?
   var m = request.url.match(/^\/(\d+)/);
-  var r = m && m[0] ? m[1] : 204;
+  var r = m && m[0] ? m[1] : 200;
 
   response.writeHead(r);
   response.end();
