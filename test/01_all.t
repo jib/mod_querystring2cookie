@@ -14,14 +14,14 @@ use LWP::UserAgent;
 
 my $Base                = "http://localhost:7000";
 my $Debug               = 0;
-my $DefaultQueryString  = "a=1&b=2&c";
-my $DefaultExpires      = 86400;    # as set as the module default
+my $DefaultName         = 'qs2cookie';  # as set as the module default
+my $DefaultQueryString  = 'a=1&b=2&c';
+my $DefaultExpires      = 86400;        # as set as the module default
 
 GetOptions(
     'base=s'            => \$Base,
     'debug'             => \$Debug,
 );
-
 
 my %Map     = (
     ### module is not turned on
@@ -31,44 +31,45 @@ my %Map     = (
 
     ### This should not return cookies
     "basic/no_query_string" => {
-        qs  => '',
-    },
-
-    ### straight forward conversion
-    basic   => { },
-
-    ### use a different domain
-    domain  => {
-        domain  => '.example.com',
-    },
-
-    ### prefix the cookie values
-    prefix  => {
-        prefix  => 'prefix_',
-    },
-
-    ### limit the size of the returned cookies
-    max_size => {
-        expect  => { a => 1 },
-    },
-
-    ### sending a dnt header - no cookie should be returned
-    "basic/sending_dnt_header" => {
-        header      => [ DNT => 1 ],
+        qs          => '',
         no_cookie   => 1,
     },
 
-    ### sending a dnt header, but this time the module is enabled anyway
-    enable_on_dnt => {
-        header      => [ DNT => 1 ],
-    },
+     ### straight forward conversion
+     basic   => { },
 
-    ### some keys are supposed to be ignored, case insensitive
-    ignore => {
-        qs      => $DefaultQueryString .
-                    "&ignore=3&DiScArd=4&do_not_ignore=42&ignore_me_not=21",
-        expect  => { a => 1, b => 2, do_not_ignore => 42, ignore_me_not => 21 },
-    }
+     ### use a different domain
+     domain  => {
+         domain  => '.example.com',
+     },
+
+     ### prefix the cookie values
+     prefix  => {
+         prefix  => 'prefix_',
+     },
+
+     ### limit the size of the returned cookies
+     max_size => {
+         expect  => { a => 1 },
+     },
+
+     ### sending a dnt header - no cookie should be returned
+     "basic/sending_dnt_header" => {
+         header      => [ DNT => 1 ],
+         no_cookie   => 1,
+     },
+
+     ### sending a dnt header, but this time the module is enabled anyway
+     enable_on_dnt => {
+         header      => [ DNT => 1 ],
+     },
+
+     ### some keys are supposed to be ignored, case insensitive
+     ignore => {
+         qs      => $DefaultQueryString .
+                     "&ignore=3&DiScArd=4&do_not_ignore=42&ignore_me_not=21",
+         expect  => { a => 1, b => 2, do_not_ignore => 42, ignore_me_not => 21 },
+     }
 );
 
 
@@ -78,11 +79,12 @@ for my $endpoint ( sort keys %Map ) {
 
     ### Defaults in case not provided
     my $qs          = exists $cfg->{qs} ? $cfg->{qs} : $DefaultQueryString;
-    my $header      = $cfg->{header}    || [ ];
-    my $prefix      = $cfg->{prefix}    || '';
-    my $expires     = $cfg->{expires}   || $DefaultExpires;
-    my $domain      = $cfg->{domain}    || '';              # unset by default
-    my $expect      = $cfg->{expect}    || undef;
+    my $header      = $cfg->{header}        || [ ];
+    my $prefix      = $cfg->{prefix}        || '';
+    my $expires     = $cfg->{expires}       || $DefaultExpires;
+    my $domain      = $cfg->{domain}        || '';              # unset by default
+    my $expect      = $cfg->{expect}        || undef;
+    my $cookie_name = $cfg->{cookie_name}   || $DefaultName;
 
     ### build the test
     my $url     = "$Base/$endpoint?$qs";
@@ -108,11 +110,15 @@ for my $endpoint ( sort keys %Map ) {
         next;
     }
 
+    ### this should only send back ONE set cookie header
+    is( scalar( @{[ $res->header( 'Set-Cookie' ) ]} ), 1,
+                    "   Exactly one cookie header returned" );
+
     ### parse out the cookie values, quick and dirty
-    my $parsed_cookie = _parse_cookie( $res->header( 'Set-Cookie' ) );
+    my $parsed_cookie = _parse_cookie( [ $res->header( 'Set-Cookie' ) ]->[0] );
 
     ### valide the key/value pairs are as expected
-    my $rv = _validate_cookie( $url, $parsed_cookie, $prefix, $expect );
+    my $rv = _validate_cookie( $url, $parsed_cookie, $prefix, $expect, $cookie_name );
 
     ### check meta variables - only applies if cookies are supposed to be returned
     if( $qs ) {
@@ -138,35 +144,45 @@ for my $endpoint ( sort keys %Map ) {
 
 }
 
+### A cookie will look like this:
+### Set-Cookie: prefix_$defaultname=key1|val1^key2|val2; path.. ; domain.. ; expires..
 sub _parse_cookie {
-    my @cookies = @_;
-    my $rv      = { pairs => {}, meta => {} };
+    my $cookie  = shift;
+    my $rv      = { };
 
-    for my $str (@cookies) {
+    diag "Returned cookie: $cookie" if $Debug;
 
-        diag "Returned cookie: $str" if $Debug;
+    for my $kv ( split( /;\s*/, $cookie ) ) {
+        my($k,$v) = split( /=/, $kv );
 
-        for my $kv ( split( /;\s*/, $str ) ) {
-            my($k,$v) = split( /=/, $kv );
+        ### What type of variable? We're overriding the meta variables,
+        ### but that's ok, they're the same for all cookies anyway
+        if( $k =~ /path|domain|expires/i ) {
+            $rv->{'meta'}->{$k} = $v;
 
-            ### What type of variable? We're overriding the meta variables,
-            ### but that's ok, they're the same for all cookies anyway
-            my $cat = $k =~ /path|domain|expires/i ? "meta" : "pairs";
-            $rv->{$cat}->{$k} = $v;
+        } else {
+
+            ### split the value up. Format is:
+            ### key1|val1^key2|val2
+            for my $pair ( split /\^/, $v ) {
+                my($key, $val) = split /\|/, $pair;
+
+                $rv->{ $k }->{ $key } = $val;
+            }
         }
     }
 
     diag "Parsed cookie: ". Dumper( $rv ) if $Debug;
 
-
     return $rv;
 }
 
 sub _validate_cookie {
-    my $url     = shift;
-    my $pc      = shift;
-    my $pre     = shift || '';
-    my $expect  = shift;
+    my $url         = shift;
+    my $pc          = shift;
+    my $pre         = shift || '';
+    my $expect      = shift;
+    my $cookie_name = shift;
 
     ### for ?a=1&b it will have { a => 1, b => '' }. Filter out b as that
     ### is not how our module behaves. Also prepend with the prefix, if
@@ -181,5 +197,5 @@ sub _validate_cookie {
     diag "Unfiltered cookie: ". Dumper( \%qs )  if $Debug;
     diag "Filtered cookie: ".   Dumper( \%fqs ) if $Debug;
 
-    is_deeply( $pc->{'pairs'}, \%fqs, "   Cookie pairs match query string" );
+    is_deeply( $pc->{ $cookie_name }, \%fqs, "   Cookie pairs match query string" );
 }
