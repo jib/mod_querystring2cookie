@@ -40,6 +40,7 @@
 #define _DEBUG 0
 #endif
 
+
 // module configuration - this is basically a global struct
 typedef struct {
     int enabled;            // module enabled?
@@ -48,6 +49,12 @@ typedef struct {
     int cookie_max_size;    // maximum size of all the key/value pairs
     char *cookie_domain;    // domain the cookie will be set in
     char *cookie_prefix;    // prefix all keys in the cookie with this string
+    char *cookie_name;      // use this as the cookie name, unless cookie_name_from is set
+    char *cookie_name_from; // use this is as the cookie name from the query string
+    char *cookie_pair_delimiter;
+                            // seperate key/value pairs in the cookie with this char
+    char *cookie_key_value_delimiter;
+                            // seperate the key and value in a cookie with this char
     apr_array_header_t *qs_ignore;
                             // query string keys that will not be set in the cookie
 } settings_rec;
@@ -67,7 +74,7 @@ static int hook(request_rec *r)
     }
 
     /* No query string? nothing to do here */
-    if( !(r->args || (strlen( r->args ) < 1)) ) {
+    if( strlen( r->args ) < 1 ) {
         return DECLINED;
     }
 
@@ -77,7 +84,7 @@ static int hook(request_rec *r)
         return DECLINED;
     }
 
-    _DEBUG && fprintf( stderr, "Query string: %s\n", r->args );
+    _DEBUG && fprintf( stderr, "Query string: '%s'\n", r->args );
 
     // ***********************************
     // Calculate expiry time
@@ -87,7 +94,7 @@ static int hook(request_rec *r)
     // support it :(
     apr_time_exp_t tms;
     apr_time_exp_gmt( &tms, r->request_time
-                         + apr_time_from_sec( cfg->cookie_expires ) );
+                          + apr_time_from_sec( cfg->cookie_expires ) );
 
     // XXX add if cfg->expires
     char *expires = apr_psprintf( r->pool,
@@ -117,12 +124,20 @@ static int hook(request_rec *r)
     // it's not getting flooded.
     int total_pair_size = 0;
 
+    // This holds the final cookie we'll send back - make sure to initialize
+    // or it can point at garbage!
+    char *cookie = "";
+
+    // string to use as the cookie name (together with the prefix) - make sure to
+    // initialize or it can point at garbage!
+    char *cookie_name = "";
+
     // Iterate over the key/value pairs
     char *last_pair;
     char *pair = apr_strtok( apr_pstrdup( r->pool, r->args ), "&", &last_pair );
 
-    // we need to build a Set-Cookie for EVERY pair - it is not supported to
-    // send more than one key=val pair per set-cookie :(
+    _DEBUG && fprintf( stderr, "about to parse query string for pairs\n" );
+
     while( pair != NULL ) {
 
         // length of the substr before the = sign (or index of the = sign)
@@ -131,6 +146,35 @@ static int hook(request_rec *r)
         // Does not contains a =, or starts with a =, meaning it's garbage
         if( !strstr(pair, "=") || contains_equals_at < 1 ) {
             _DEBUG && fprintf( stderr, "invalid pair: %s\n", pair );
+
+            // And get the next pair -- has to be done at every break
+            pair = apr_strtok( NULL, "&", &last_pair );
+            continue;
+        }
+
+        _DEBUG && fprintf( stderr, "pair looks valid: %s - = sign at pos: %i\n",
+                            pair, contains_equals_at );
+
+        // So this IS a key value pair. Let's get the key and the value.
+        // first, get the key - everything up to the first =
+        char *key   = apr_pstrndup( r->pool, pair, contains_equals_at );
+
+        // now get the value, everything AFTER the = sign. We do that by
+        // moving the pointer past the = sign.
+        char *value = apr_pstrdup( r->pool, pair );
+        value += contains_equals_at + 1;
+
+        _DEBUG && fprintf( stderr, "pair=%s, key=%s, value=%s\n", pair, key, value );
+
+        // you want us to use a name from the query string?
+        // This might be that name.
+        if( cfg->cookie_name_from && !(cookie_name) &&
+            strcasecmp( key, cfg->cookie_name_from ) == 0
+        ) {
+            // get everything after the = sign -- that's our name.
+            cookie_name = key;
+
+            _DEBUG && fprintf( stderr, "using %s as the cookie name\n", cookie_name );
 
             // And get the next pair -- has to be done at every break
             pair = apr_strtok( NULL, "&", &last_pair );
@@ -145,7 +189,6 @@ static int hook(request_rec *r)
             // you might have blacklisted this key; let's check
             // Following tutorial code here again:
             // http://dev.ariel-networks.com/apr/apr-tutorial/html/apr-tutorial-19.html
-
             int i;
             for( i = 0; i < cfg->qs_ignore->nelts; i++ ) {
 
@@ -158,71 +201,119 @@ static int hook(request_rec *r)
                 // do this by comparing the string length first - if the length of
                 // the ignore key and the key are identical AND the first N characters
                 // of the string are the same
-
-                _DEBUG && fprintf( stderr, "strlen ignore: %i, =: %i\n",
-                        strlen(ignore ), contains_equals_at );
-
-                if( strlen( ignore ) == contains_equals_at &&
-                    strncasecmp( pair, ignore, contains_equals_at ) == 0
-                ) {
+                if( strcasecmp( key, ignore ) == 0 ) {
                     _DEBUG && fprintf( stderr, "pair %s is on the ignore list: %s\n",
                                         pair, ignore );
 
                     // signal to continue the outer loop; we found an ignore match
                     do_continue = 1;
                     break;
-
                 }
             }
 
-            // match found, move on
+            // ignore match found, move on
             if( do_continue ) {
                 // And get the next pair -- has to be done at every break
                 pair = apr_strtok( NULL, "&", &last_pair );
-
                 continue;
             }
-
         }
 
         // looks like a valid key=value declaration
-        _DEBUG && fprintf( stderr, "pair: %s\n", pair );
+        _DEBUG && fprintf( stderr, "valid key/value pair: %s\n", pair );
 
-        int this_pair_size = strlen( cfg->cookie_prefix ) + strlen( pair );
+        // Now, let's do some transposing: The '=' sign needs to be replaced
+        // with whatever the separator is. It can't be a '=' sign, as that's
+        // illegal in cookies. The string may be larger than a single char,
+        // so split the string and do the magix.
+
+        // This makes key[delim]value - redefining pair here is safe, we're
+        // just using it for printing now.
+        char *key_value = apr_pstrcat( r->pool,
+                                cfg->cookie_prefix, key,
+                                cfg->cookie_key_value_delimiter, value,
+                                NULL
+                            );
+
+        int this_pair_size = strlen( cfg->cookie_prefix ) + strlen( key_value );
 
         // Make sure the individual pair, as well as the whole thing doesn't
         // get too long
+
+        _DEBUG && fprintf( stderr,
+                "this pair size: %i, total pair size: %i, max size: %i\n",
+                this_pair_size, total_pair_size, cfg->cookie_max_size  );
+
         if( (this_pair_size <= cfg->cookie_max_size) &&
             (total_pair_size + this_pair_size <= cfg->cookie_max_size)
         ) {
 
-            // update the book keeping
-            total_pair_size += this_pair_size;
-
-            // And append it to the existing cookie
-            char *cookie = apr_pstrcat( r->pool,
-                                cfg->cookie_prefix, pair, "; ",
-                                "path=/; ",
-                                domain,
-                                expires,
-                                NULL
+            cookie = apr_pstrcat( r->pool,
+                                  cookie,       // the cookie so far
+                                  // If we already have pairs in here, we need the
+                                  // delimiter, otherwise we don't.
+                                  (strlen(cookie) ? cfg->cookie_pair_delimiter : ""),
+                                  key_value,    // the next pair.
+                                  NULL
                             );
 
-            // r->err_headers_out also honors non-2xx responses and
-            // internal redirects. See the patch here:
-            // http://svn.apache.org/viewvc?view=revision&revision=1154620
-            apr_table_addn( r->err_headers_out, "Set-Cookie", cookie );
+            // update the book keeping - this is the new size including delims
+            total_pair_size = strlen(cookie);
 
-            _DEBUG && fprintf( stderr, "cookie: %s\n", cookie );
+            _DEBUG && fprintf( stderr, "this pair size: %i, total pair size: %i\n",
+                                    this_pair_size, total_pair_size );
 
         } else {
             _DEBUG && fprintf( stderr,
                 "Pair size too long to add: %s (this: %i total: %i max: %i)\n",
-                pair, this_pair_size, total_pair_size, cfg->cookie_max_size );
+                key_value, this_pair_size, total_pair_size, cfg->cookie_max_size );
         }
 
         // and move the pointer
         pair = apr_strtok( NULL, "&", &last_pair );
+    }
+
+     // So you told us we should use a cookie name from the query string,
+     // but we never found it in there. That's a problem.
+     if( cfg->cookie_name_from && !(cookie_name) ) {
+
+         // r->err_headers_out also honors non-2xx responses and
+         // internal redirects. See the patch here:
+         // http://svn.apache.org/viewvc?view=revision&revision=1154620
+         apr_table_addn( r->err_headers_out,
+             "X-QS2Cookie",
+             apr_pstrcat( r->pool,
+                 "ERROR: Did not detect cookie name - missing QS argument: ",
+                 cfg->cookie_name_from,
+                 NULL
+             )
+         );
+
+     // Let's return the output
+     } else {
+
+         // we got here without a cookie name? We can use the default.
+         if( !strlen(cookie_name) ) {
+             _DEBUG && fprintf( stderr, "explicitly setting cookie name to: %s\n",
+                                         cfg->cookie_name );
+
+             cookie_name = cfg->cookie_name;
+         }
+
+         _DEBUG && fprintf( stderr, "cookie name: %s\n", cookie_name );
+
+         cookie = apr_pstrcat( r->pool,
+                         cookie_name, "=", cookie, "; ", // cookie data
+                         "path=/; ", domain, expires,    // meta data
+                         NULL
+                     );
+
+        _DEBUG && fprintf( stderr, "cookie: %s\n", cookie );
+
+        // r->err_headers_out also honors non-2xx responses and
+        // internal redirects. See the patch here:
+        // http://svn.apache.org/viewvc?view=revision&revision=1154620
+        apr_table_addn( r->err_headers_out, "Set-Cookie", cookie );
     }
 
     return OK;
@@ -240,13 +331,17 @@ static void *init_settings(apr_pool_t *p, char *d)
     settings_rec *cfg;
 
     cfg = (settings_rec *) apr_pcalloc(p, sizeof(settings_rec));
-    cfg->enabled           = 0;
-    cfg->enabled_if_dnt    = 0;
-    cfg->cookie_expires    = 86400; // a day
-    cfg->cookie_max_size   = 1024;
-    cfg->cookie_domain     = "";    // used in apr_pstrcat - can't be null
-    cfg->cookie_prefix     = "";    // used in apr_pstrcat - can't be null
-    cfg->qs_ignore         = apr_array_make(p, 2, sizeof(const char*) );
+    cfg->enabled                    = 0;
+    cfg->enabled_if_dnt             = 0;
+    cfg->cookie_expires             = 86400; // in seconds - so a day
+    cfg->cookie_max_size            = 1024;
+    cfg->cookie_name                = "qs2cookie";
+    cfg->cookie_name_from           = NULL;
+    cfg->cookie_domain              = "";    // used in apr_pstrcat - can't be null
+    cfg->cookie_prefix              = "";    // used in apr_pstrcat - can't be null
+    cfg->cookie_pair_delimiter      = "^";
+    cfg->cookie_key_value_delimiter = "|";
+    cfg->qs_ignore                  = apr_array_make(p, 2, sizeof(const char*) );
 
     return cfg;
 }
@@ -294,6 +389,33 @@ static const char *set_config_value(cmd_parms *cmd, void *mconfig,
     } else if( strcasecmp(name, "QS2CookiePrefix") == 0 ) {
         cfg->cookie_prefix     = apr_pstrdup(cmd->pool, value);
 
+    /* Use this query string argument for the cookie name */
+    } else if( strcasecmp(name, "QS2CookieName") == 0 ) {
+        cfg->cookie_name       = apr_pstrdup(cmd->pool, value);
+
+    /* Use this query string argument for the cookie name */
+    } else if( strcasecmp(name, "QS2CookieNameFrom") == 0 ) {
+        cfg->cookie_name_from  = apr_pstrdup(cmd->pool, value);
+
+    /* Use this delimiter for pairs of key/values */
+    } else if( strcasecmp(name, "QS2CookiePairDelimiter") == 0 ) {
+
+        if( strcspn( value, "=" ) >= 0 ) {
+            return apr_psprintf(cmd->pool,
+                "Variable %s may not be '=' -- illegal in cookie values", name);
+        }
+
+        cfg->cookie_pair_delimiter  = apr_pstrdup(cmd->pool, value);
+
+    /* Use this delimiter between a key and a value */
+    } else if( strcasecmp(name, "QS2CookieKeyValueDelimiter") == 0 ) {
+
+        if( strcspn( value, "=" ) >= 0 ) {
+            return apr_psprintf(cmd->pool,
+                "Variable %s may not be '=' -- illegal in cookie values", name);
+        }
+
+        cfg->cookie_key_value_delimiter  = apr_pstrdup(cmd->pool, value);
 
     /* Maximum size of all the key/value pairs */
     } else if( strcasecmp(name, "QS2CookieMaxSize") == 0 ) {
@@ -378,6 +500,14 @@ static const command_rec commands[] = {
                   "maximum size to allow for all the key/value pairs in this request"),
     AP_INIT_TAKE1("QS2CookiePrefix",        set_config_value,   NULL, OR_FILEINFO,
                   "prefix all cookie keys with this string"),
+    AP_INIT_TAKE1("QS2CookieName",          set_config_value,   NULL, OR_FILEINFO,
+                  "this will be the cookie name, unless QS2CookieNameFrom is set"),
+    AP_INIT_TAKE1("QS2CookieNameFrom",      set_config_value,   NULL, OR_FILEINFO,
+                  "the cookie name will come from this query paramater"),
+    AP_INIT_TAKE1("QS2CookiePairDelimiter", set_config_value,   NULL, OR_FILEINFO,
+                  "pairs of key/values will be delimited by this character"),
+    AP_INIT_TAKE1("QS2CookieKeyValueDelimiter", set_config_value,   NULL, OR_FILEINFO,
+                  "key and value will be delimited by this character"),
     AP_INIT_FLAG( "QS2CookieEnableIfDNT",  set_config_enable,  NULL, OR_FILEINFO,
                   "whether or not to enable cookies if 'X-DNT' header is present"),
     AP_INIT_ITERATE( "QS2CookieIgnore",     set_config_value,   NULL, OR_FILEINFO,
