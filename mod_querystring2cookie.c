@@ -107,15 +107,6 @@ static int hook(request_rec *r)
                     );
 
     // ***********************************
-    // Domain to set the cookie in
-    // ***********************************
-
-    // If empty, the browser assign the domain the object was requested from
-    char *domain = strlen( cfg->cookie_domain )
-                    ? apr_pstrcat( r->pool, "domain=", cfg->cookie_domain, "; ", NULL )
-                    : "";
-
-    // ***********************************
     // Find key/value pairs
     // ***********************************
 
@@ -137,6 +128,8 @@ static int hook(request_rec *r)
     char *pair = apr_strtok( apr_pstrdup( r->pool, r->args ), "&", &last_pair );
 
     _DEBUG && fprintf( stderr, "about to parse query string for pairs\n" );
+
+    _DEBUG && fprintf( stderr, "looking for cookie name in %s\n", cfg->cookie_name_from );
 
     while( pair != NULL ) {
 
@@ -168,11 +161,11 @@ static int hook(request_rec *r)
 
         // you want us to use a name from the query string?
         // This might be that name.
-        if( cfg->cookie_name_from && !(cookie_name) &&
+        if( cfg->cookie_name_from && !(strlen(cookie_name)) &&
             strcasecmp( key, cfg->cookie_name_from ) == 0
         ) {
             // get everything after the = sign -- that's our name.
-            cookie_name = key;
+            cookie_name = value;
 
             _DEBUG && fprintf( stderr, "using %s as the cookie name\n", cookie_name );
 
@@ -304,7 +297,9 @@ static int hook(request_rec *r)
 
          cookie = apr_pstrcat( r->pool,
                          cookie_name, "=", cookie, "; ", // cookie data
-                         "path=/; ", domain, expires,    // meta data
+                         "path=/; ",                     // meta data
+                         cfg->cookie_domain,
+                         expires,
                          NULL
                      );
 
@@ -371,7 +366,6 @@ static const char *set_config_value(cmd_parms *cmd, void *mconfig,
         return apr_psprintf(cmd->pool, "%s not allowed to be NULL", name);
     }
 
-
     /* Domain to set the cookie in */
     if( strcasecmp(name, "QS2CookieDomain") == 0 ) {
 
@@ -383,7 +377,10 @@ static const char *set_config_value(cmd_parms *cmd, void *mconfig,
             return "QS2CookieDomain values must contain at least one embedded dot";
         }
 
-        cfg->cookie_domain = apr_pstrdup(cmd->pool, value);
+        // immediately format it for the cookie value, as that's the only
+        // place we'll be using it.
+        cfg->cookie_domain =
+            apr_pstrcat( cmd->pool, "domain=", value, "; ", NULL );
 
     /* Prefix for all keys set in the cookie */
     } else if( strcasecmp(name, "QS2CookiePrefix") == 0 ) {
@@ -400,7 +397,7 @@ static const char *set_config_value(cmd_parms *cmd, void *mconfig,
     /* Use this delimiter for pairs of key/values */
     } else if( strcasecmp(name, "QS2CookiePairDelimiter") == 0 ) {
 
-        if( strcspn( value, "=" ) >= 0 ) {
+        if( strcspn( value, "=" ) == 0 ) {
             return apr_psprintf(cmd->pool,
                 "Variable %s may not be '=' -- illegal in cookie values", name);
         }
@@ -410,7 +407,7 @@ static const char *set_config_value(cmd_parms *cmd, void *mconfig,
     /* Use this delimiter between a key and a value */
     } else if( strcasecmp(name, "QS2CookieKeyValueDelimiter") == 0 ) {
 
-        if( strcspn( value, "=" ) >= 0 ) {
+        if( strcspn( value, "=" ) == 0 ) {
             return apr_psprintf(cmd->pool,
                 "Variable %s may not be '=' -- illegal in cookie values", name);
         }
@@ -492,6 +489,8 @@ static const char *set_config_enable(cmd_parms *cmd, void *mconfig,
 static const command_rec commands[] = {
     AP_INIT_FLAG( "QS2Cookie",              set_config_enable,  NULL, OR_FILEINFO,
                   "whether or not to enable querystring to cookie module"),
+    AP_INIT_FLAG( "QS2CookieEnableIfDNT",   set_config_enable,  NULL, OR_FILEINFO,
+                  "whether or not to enable cookies if 'X-DNT' header is present"),
     AP_INIT_TAKE1("QS2CookieExpires",       set_config_value,   NULL, OR_FILEINFO,
                   "expiry time for the cookie, in seconds after the request is served"),
     AP_INIT_TAKE1("QS2CookieDomain",        set_config_value,   NULL, OR_FILEINFO,
@@ -506,10 +505,9 @@ static const command_rec commands[] = {
                   "the cookie name will come from this query paramater"),
     AP_INIT_TAKE1("QS2CookiePairDelimiter", set_config_value,   NULL, OR_FILEINFO,
                   "pairs of key/values will be delimited by this character"),
-    AP_INIT_TAKE1("QS2CookieKeyValueDelimiter", set_config_value,   NULL, OR_FILEINFO,
+    AP_INIT_TAKE1("QS2CookieKeyValueDelimiter",
+                                            set_config_value,   NULL, OR_FILEINFO,
                   "key and value will be delimited by this character"),
-    AP_INIT_FLAG( "QS2CookieEnableIfDNT",  set_config_enable,  NULL, OR_FILEINFO,
-                  "whether or not to enable cookies if 'X-DNT' header is present"),
     AP_INIT_ITERATE( "QS2CookieIgnore",     set_config_value,   NULL, OR_FILEINFO,
                   "list of query string keys that will not be set in the cookie" ),
     {NULL}
