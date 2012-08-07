@@ -93,19 +93,23 @@ static int hook(request_rec *r)
 
     // The expiry time. We can't use max-age because IE6 - IE8 do not
     // support it :(
-    apr_time_exp_t tms;
-    apr_time_exp_gmt( &tms, r->request_time
-                          + apr_time_from_sec( cfg->cookie_expires ) );
+    char *expires = "";
 
-    // XXX add if cfg->expires
-    char *expires = apr_psprintf( r->pool,
-                        "expires=%s, %.2d-%s-%.2d %.2d:%.2d:%.2d GMT",
-                        apr_day_snames[tms.tm_wday],
-                        tms.tm_mday,
-                        apr_month_snames[tms.tm_mon],
-                        tms.tm_year % 100,
-                        tms.tm_hour, tms.tm_min, tms.tm_sec
-                    );
+    if( cfg->cookie_expires > 0 ) {
+
+        apr_time_exp_t tms;
+        apr_time_exp_gmt( &tms, r->request_time
+                              + apr_time_from_sec( cfg->cookie_expires ) );
+
+        expires = apr_psprintf( r->pool,
+                            "expires=%s, %.2d-%s-%.2d %.2d:%.2d:%.2d GMT",
+                            apr_day_snames[tms.tm_wday],
+                            tms.tm_mday,
+                            apr_month_snames[tms.tm_mon],
+                            tms.tm_year % 100,
+                            tms.tm_hour, tms.tm_min, tms.tm_sec
+                        );
+    }
 
     // ***********************************
     // Find key/value pairs
@@ -269,7 +273,7 @@ static int hook(request_rec *r)
 
      // So you told us we should use a cookie name from the query string,
      // but we never found it in there. That's a problem.
-     if( cfg->cookie_name_from && !(cookie_name) ) {
+     if( cfg->cookie_name_from && !strlen(cookie_name) ) {
 
          // r->err_headers_out also honors non-2xx responses and
          // internal redirects. See the patch here:
@@ -303,26 +307,19 @@ static int hook(request_rec *r)
             cookie = apr_pstrcat( r->pool,
                             // cookie data
                             cookie_name, cfg->cookie_pair_delimiter, cookie, "=",
-                            apr_psprintf( r->pool, "%d", apr_time_sec(apr_time_now()) ), "; ",
-                            // meta data
-                            "path=/; ",
-                            cfg->cookie_domain,
-                            expires,
+                            apr_psprintf( r->pool, "%lld", apr_time_sec(apr_time_now()) ),
                             NULL
                          );
         } else {
             _DEBUG && fprintf( stderr, "encoding in the value\n", cookie_name );
-            cookie = apr_pstrcat( r->pool,
-                            // cookie data
-                            cookie_name, "=", cookie, "; ",
-                            // meta data
-                            "path=/; ",
-                            cfg->cookie_domain,
-                            expires,
-                            NULL
-                         );
+            cookie = apr_pstrcat( r->pool, cookie_name, "=", cookie, NULL );
 
         }
+
+        // And now add the meta data to the cookie
+        cookie = apr_pstrcat( r->pool, cookie, "; ",
+                                "path=/; ", cfg->cookie_domain, expires,
+                                NULL );
 
         _DEBUG && fprintf( stderr, "cookie: %s\n", cookie );
 
@@ -350,7 +347,7 @@ static void *init_settings(apr_pool_t *p, char *d)
     cfg->enabled                    = 0;
     cfg->enabled_if_dnt             = 0;
     cfg->encode_in_key              = 0;
-    cfg->cookie_expires             = 86400; // in seconds - so a day
+    cfg->cookie_expires             = 0; // in seconds - so a day
     cfg->cookie_max_size            = 1024;
     cfg->cookie_name                = "qs2cookie";
     cfg->cookie_name_from           = NULL;
