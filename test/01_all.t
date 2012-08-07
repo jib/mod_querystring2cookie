@@ -83,16 +83,41 @@ my %Map     = (
 
     ### don't get the default name, get it from a query string
     cookie_name_from => {
-        cookie_name         => 'cookie_name',
-        qs                  => "cookie_name_from=cookie_name&". $DefaultQueryString,
-        expect              => { a => 1, b => 2 },
+        cookie_name => 'cookie_name',
+        qs          => "cookie_name_from=cookie_name&". $DefaultQueryString,
+        expect      => { a => 1, b => 2 },
     },
 
     ### use different delimiters in the cookie value
     delimiters => {
         cookie_pair_delimiter       => ',',
         cookie_key_value_delimiter  => '-',
-    }
+    },
+
+    ### use a different encoding style, namely in the key, not the value
+    encode_in_key => {
+        expect  => sub {
+            ### The parsing routine will turn this:
+            ### qs2cookie^a|1^b|2=1344326082; path=/; expires=Wed, 08-Aug-12 07:54:42 GMT
+            ### into this (the value is the timestamp in seconds of when it's set):
+            ### 'qs2cookie^a|1^b|2' => { '1344326082' => undef }
+
+            my $parsed_cookie   = shift;
+            my $key             = 'qs2cookie^a|1^b|2';
+
+            ok( exists $parsed_cookie->{$key},  "   Key $key exists" );
+
+            my $href            = $parsed_cookie->{$key};
+            isa_ok( $href,              "HASH", "       Value" );
+            is( scalar(keys(%$href)),   1,      "       Sub hash has 1 key" );
+
+            my $val             = [ keys %$href ]->[0];
+            ok( $val,                           "       Value exists: $val" );
+            like( $val, qr/^\d+$/,              "           All digits" );
+            cmp_ok( $val, '<=', time + 5,       "           Older than 5 secs from now" );
+            cmp_ok( $val, '>=', time - 5,       "           Younger than 5 secs ago" );
+        },
+    },
 );
 
 
@@ -152,9 +177,17 @@ for my $endpoint ( sort keys %Map ) {
                             $cookie_key_value_delimiter,
                         );
 
-    ### valide the key/value pairs are as expected
-    my $rv = _validate_cookie( $url, $parsed_cookie, $prefix, $expect,
-                                $cookie_name );
+    ### custom subroutine?
+    if( UNIVERSAL::isa( $expect, 'CODE' ) ) {
+        $expect->( $parsed_cookie );
+
+    ### just a plain hash?
+    } else {
+
+        ### valide the key/value pairs are as expected
+        my $rv = _validate_cookie( $url, $parsed_cookie, $prefix, $expect,
+                                    $cookie_name );
+    }
 
     ### check meta variables - only applies if cookies are supposed to be returned
     if( $qs ) {

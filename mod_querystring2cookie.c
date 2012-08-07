@@ -45,6 +45,7 @@
 typedef struct {
     int enabled;            // module enabled?
     int enabled_if_dnt;     // module enabled for requests with X-DNT?
+    int encode_in_key;      // encode the pairs in the key instead of the value?
     int cookie_expires;     // holds the expires value for the cookie
     int cookie_max_size;    // maximum size of all the key/value pairs
     char *cookie_domain;    // domain the cookie will be set in
@@ -295,13 +296,33 @@ static int hook(request_rec *r)
 
          _DEBUG && fprintf( stderr, "cookie name: %s\n", cookie_name );
 
-         cookie = apr_pstrcat( r->pool,
-                         cookie_name, "=", cookie, "; ", // cookie data
-                         "path=/; ",                     // meta data
-                         cfg->cookie_domain,
-                         expires,
-                         NULL
-                     );
+        // XXX use a sprintf format for more flexibility?
+        if( cfg->encode_in_key ) {
+            _DEBUG && fprintf( stderr, "encoding in the key\n", cookie_name );
+
+            cookie = apr_pstrcat( r->pool,
+                            // cookie data
+                            cookie_name, cfg->cookie_pair_delimiter, cookie, "=",
+                            apr_psprintf( r->pool, "%d", apr_time_sec(apr_time_now()) ), "; ",
+                            // meta data
+                            "path=/; ",
+                            cfg->cookie_domain,
+                            expires,
+                            NULL
+                         );
+        } else {
+            _DEBUG && fprintf( stderr, "encoding in the value\n", cookie_name );
+            cookie = apr_pstrcat( r->pool,
+                            // cookie data
+                            cookie_name, "=", cookie, "; ",
+                            // meta data
+                            "path=/; ",
+                            cfg->cookie_domain,
+                            expires,
+                            NULL
+                         );
+
+        }
 
         _DEBUG && fprintf( stderr, "cookie: %s\n", cookie );
 
@@ -328,6 +349,7 @@ static void *init_settings(apr_pool_t *p, char *d)
     cfg = (settings_rec *) apr_pcalloc(p, sizeof(settings_rec));
     cfg->enabled                    = 0;
     cfg->enabled_if_dnt             = 0;
+    cfg->encode_in_key              = 0;
     cfg->cookie_expires             = 86400; // in seconds - so a day
     cfg->cookie_max_size            = 1024;
     cfg->cookie_name                = "qs2cookie";
@@ -473,6 +495,9 @@ static const char *set_config_enable(cmd_parms *cmd, void *mconfig,
     } else if( strcasecmp(name, "QS2CookieEnableIfDNT") == 0 ) {
         cfg->enabled_if_dnt    = value;
 
+    } else if( strcasecmp(name, "QS2CookieEncodeInKey") == 0 ) {
+        cfg->encode_in_key     = value;
+
     } else {
         return apr_psprintf(cmd->pool, "No such variable %s", name);
     }
@@ -491,6 +516,8 @@ static const command_rec commands[] = {
                   "whether or not to enable querystring to cookie module"),
     AP_INIT_FLAG( "QS2CookieEnableIfDNT",   set_config_enable,  NULL, OR_FILEINFO,
                   "whether or not to enable cookies if 'X-DNT' header is present"),
+    AP_INIT_FLAG( "QS2CookieEncodeInKey",   set_config_enable,  NULL, OR_FILEINFO,
+                  "rather than encoding the pairs in the value, encode them in the key"),
     AP_INIT_TAKE1("QS2CookieExpires",       set_config_value,   NULL, OR_FILEINFO,
                   "expiry time for the cookie, in seconds after the request is served"),
     AP_INIT_TAKE1("QS2CookieDomain",        set_config_value,   NULL, OR_FILEINFO,
