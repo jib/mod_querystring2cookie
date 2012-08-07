@@ -290,7 +290,7 @@ sub _validate_cookie {
     my %qs  = URI->new( $url )->query_form;
     my %fqs = $expect
                 ? %$expect
-                : map  { $pre . $_->[0] => $_->[1] }
+                : map  { $_->[0] => $_->[1] }
                   grep { $_->[1] }
                   map  { [ $_ => $qs{$_} ] } keys %qs;
 
@@ -298,5 +298,6 @@ sub _validate_cookie {
 
     diag "Filtered cookie: ".   Dumper( \%fqs ) if $Debug;
 
-    is_deeply( $pc->{ $cookie_name }, \%fqs, "   Cookie pairs match query string" );
+    is_deeply( $pc->{ $pre . $cookie_name }, \%fqs,
+                        "   Cookie pairs match query string" );
 }

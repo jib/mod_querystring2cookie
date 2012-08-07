@@ -170,7 +170,7 @@ static int hook(request_rec *r)
             strcasecmp( key, cfg->cookie_name_from ) == 0
         ) {
             // get everything after the = sign -- that's our name.
-            cookie_name = value;
+            cookie_name = apr_pstrcat( r->pool, cfg->cookie_prefix, value, NULL );
 
             _DEBUG && fprintf( stderr, "using %s as the cookie name\n", cookie_name );
 
@@ -228,12 +228,11 @@ static int hook(request_rec *r)
         // This makes key[delim]value - redefining pair here is safe, we're
         // just using it for printing now.
         char *key_value = apr_pstrcat( r->pool,
-                                cfg->cookie_prefix, key,
-                                cfg->cookie_key_value_delimiter, value,
-                                NULL
-                            );
+                                       key, cfg->cookie_key_value_delimiter, value,
+                                       NULL
+                                    );
 
-        int this_pair_size = strlen( cfg->cookie_prefix ) + strlen( key_value );
+        int this_pair_size = strlen( key_value );
 
         // Make sure the individual pair, as well as the whole thing doesn't
         // get too long
@@ -295,7 +294,9 @@ static int hook(request_rec *r)
              _DEBUG && fprintf( stderr, "explicitly setting cookie name to: %s\n",
                                          cfg->cookie_name );
 
-             cookie_name = cfg->cookie_name;
+             cookie_name = apr_pstrcat( r->pool,
+                                        cfg->cookie_prefix, cfg->cookie_name,
+                                        NULL );
          }
 
          _DEBUG && fprintf( stderr, "cookie name: %s\n", cookie_name );
