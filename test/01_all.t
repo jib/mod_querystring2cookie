@@ -162,7 +162,8 @@ for my $endpoint ( sort keys %Map ) {
                     = quotemeta( $cfg->{cookie_key_value_delimiter} || '|' );
 
     ### build the test
-    my $url     = "$Base/$endpoint?$qs";
+    my $url     = "$Base/$endpoint";
+    $url       .= "?$qs" if $qs;
     my $ua      = LWP::UserAgent->new();
     my @req     = ($url, @$header );
 

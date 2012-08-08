@@ -75,7 +75,7 @@ static int hook(request_rec *r)
     }
 
     /* No query string? nothing to do here */
-    if( strlen( r->args ) < 1 ) {
+    if( !(r->args) || strlen( r->args ) < 1 ) {
         return DECLINED;
     }
 
