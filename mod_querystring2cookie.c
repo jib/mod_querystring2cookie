@@ -40,6 +40,11 @@
 #define _DEBUG 0
 #endif
 
+// General note - although folding multiple cookie key/value pairs into
+// a single set-cookie header is allowed through the rfc, in practice,
+// chrome doesn't seem to want them, and this posts corroborates:
+// http://stackoverflow.com/questions/2880047/is-it-possible-to-set-more-than-one-cookie-with-a-single-set-cookie
+// http://tools.ietf.org/html/rfc2109 - section 4.2.2  Set-Cookie Syntax
 
 // module configuration - this is basically a global struct
 typedef struct {
