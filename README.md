@@ -1,7 +1,7 @@
-mod_cookieecho
-==============
+mod_querystring2cookie
+======================
 
-Echo query string settings into a cookie
+Convert query string parameters into a cookie
 
 ############################
 ### Building
