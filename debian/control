@@ -1,4 +1,4 @@
-Source: modquerystring2cookie
+Source: libapache2-mod-querystring2cookie
 Section: unknown
 Priority: extra
 Maintainer: Krux Operations Team <ops@krux.com>
@@ -6,7 +6,7 @@ Build-Depends: cdbs, debhelper (>= 7), apache2-dev, perl
 Standards-Version: 3.8.3
 Homepage: https://github.com/jib/mod_querystring2cookie
 
-Package: modquerystring2cookie
+Package: libapache2-mod-querystring2cookie
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}
 Description: Apache module to convert QS into a cookie
