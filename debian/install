@@ -1,1 +1,1 @@
-/usr/lib/apache2/modules/*.so
+.libs/*.so /usr/lib/apache2/modules/*.so
