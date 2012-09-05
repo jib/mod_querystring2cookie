@@ -1,0 +1,5 @@
+modquerystring2cookie (1.0.0-1) unstable; urgency=low
+
+  * Initial release (Closes: #nnnn)  <nnnn is the bug number of your ITP>
+
+ -- Krux Operations Team <ops@krux.com>  Tue, 04 Sep 2012 23:52:48 +0000
