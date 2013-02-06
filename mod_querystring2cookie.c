@@ -313,7 +313,9 @@ static int hook(request_rec *r)
             cookie = apr_pstrcat( r->pool,
                             // cookie data
                             cookie_name, cfg->cookie_pair_delimiter, cookie, "=",
-                            apr_psprintf( r->pool, "%lld", apr_time_sec(apr_time_now()) ),
+                            // The format is different on 32 (%ld) vs 64bit (%lld), so
+                            // use the constant for it instead. You can find this in apr.h
+                            apr_psprintf( r->pool, "%" APR_OFF_T_FMT, apr_time_sec(apr_time_now()) ),
                             NULL
                          );
         } else {
