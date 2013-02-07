@@ -10,7 +10,7 @@ Convert query string parameters into a cookie
 Make sure you have apxs2 and perl installed, which on Ubuntu
 you can get by running:
 
-  $ sudo apt-get install apache2-dev perl
+  $ sudo apt-get install apache2-dev libapreq2-dev  perl
 
 From the checkout directory run:
 
