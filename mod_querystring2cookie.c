@@ -18,6 +18,9 @@
 #include "apr_lib.h"
 #include "apr_strings.h"
 
+
+#include "apreq_util.h"
+
 #define APR_WANT_STRFUNC
 #include "apr_want.h"
 
@@ -225,6 +228,20 @@ static int hook(request_rec *r)
         // looks like a valid key=value declaration
         _DEBUG && fprintf( stderr, "valid key/value pair: %s\n", pair );
 
+        // Now, the key may contain URL unsafe characters, which are also
+        // not allowed in Cookies. See here:
+        // http://tools.ietf.org/html/rfc2068, section 2.2 on 'tspecials'
+        //
+        // So instead, we url encode the key. The size of the key is max
+        // 3 times old key size (any char gets encoded into %xx), so allow
+        // for that space. See the documentation here:
+        // http://httpd.apache.org/apreq/docs/libapreq2/apreq__util_8h.html#785be2ceae273b0a7b2ffda223b2ebae
+        char *escaped_key   = apreq_escape( r->pool, key, strlen(key) );
+        char *escaped_value = apreq_escape( r->pool, value, strlen(value) );
+
+        _DEBUG && fprintf( stderr, "Original key: %s - Escaped key: %s\n", key, escaped_key );
+        _DEBUG && fprintf( stderr, "Original value: %s - Escaped value: %s\n", value, escaped_value );
+
         // Now, let's do some transposing: The '=' sign needs to be replaced
         // with whatever the separator is. It can't be a '=' sign, as that's
         // illegal in cookies. The string may be larger than a single char,
@@ -233,7 +250,9 @@ static int hook(request_rec *r)
         // This makes key[delim]value - redefining pair here is safe, we're
         // just using it for printing now.
         char *key_value = apr_pstrcat( r->pool,
-                                       key, cfg->cookie_key_value_delimiter, value,
+                                       escaped_key,
+                                       cfg->cookie_key_value_delimiter,
+                                       escaped_value,
                                        NULL
                                     );
 
