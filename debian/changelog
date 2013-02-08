@@ -1,3 +1,9 @@
+libapache2-mod-querystring2cookie (1.0.1-1) unstable; urgency=low
+
+  * URL encoding keys/values
+
+ -- Krux Operations Team <ops@krux.com>  Thu, 07 Feb 2013 02:22:39 +0100
+
 libapache2-mod-querystring2cookie (1.0.0-1) unstable; urgency=low
 
   * Initial release

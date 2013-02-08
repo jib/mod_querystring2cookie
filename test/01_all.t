@@ -34,6 +34,15 @@ my %Map     = (
         no_cookie   => 1,
     },
 
+    ### We url encode keys/values that go into cookies
+    'basic/url_escape' => {
+        qs      => 'a=/&/=42&b=;&;=42&c=@&@=42',
+        expect  => { a => '%2F', '%2F' => 42,
+                     b => '%3B', '%3B' => 42,
+                     c => '%40', '%40' => 42,
+                   },
+    },
+
     ### straight forward conversion
     basic   => { },
 

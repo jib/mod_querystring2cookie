@@ -9,7 +9,7 @@ use Getopt::Long;
 
 my $debug   = 0;
 my $apxs    = 'apxs2';
-my @flags   = do { no warnings; qw[-i -a -c -Wl,-Wall -Wl,-lm]; };
+my @flags   = qw[-i -a -c -Wl,-Wall -Wl,-lm];
 my $my_lib  = 'mod_querystring2cookie.c';
 my @inc;
 my @link;
@@ -26,6 +26,9 @@ unless( can_run( $apxs ) ) {
     die "Could not find '$apxs' in your path.\n\n" .
         "On Ubuntu/Debian, try 'sudo apt-get install apache2-dev'\n\n";
 }
+
+### ap2xs doesn't add apreq2 automatically, so we add it here.
+push @inc, '/usr/include/apreq2';
 
 ### from apxs man page:
 ### * -Wl,-lX to link against X
