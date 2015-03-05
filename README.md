@@ -69,4 +69,21 @@ especially useful if you built the library with --debug:
   $ tail -F test/error.log
 ```
 
+Building your own package
+-------------------------
+
+Make sure you have **dpkg-dev**, **cdbs** and **debhelper** installed, which on Ubuntu you can get by running:
+
+```
+$ sudo apt-get install dpkg-dev cdbs debhelper
+```
+
+Then build the package by first compiling the module, then running buildpackage:
+
+```
+$ perl build.pl
+$ dpkg-buildpackage -d -b
+```
+
+
 
