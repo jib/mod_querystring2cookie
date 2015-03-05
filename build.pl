@@ -8,8 +8,9 @@ use IPC::Cmd 'can_run';
 use Getopt::Long;
 
 my $debug   = 0;
+my $install = 0;
 my $apxs    = 'apxs2';
-my @flags   = qw[-i -a -c -Wl,-Wall -Wl,-lm];
+my @flags   = do { no warnings; qw[-a -c -Wl,-Wall -Wl,-lm]; };
 my $my_lib  = 'mod_querystring2cookie.c';
 my @inc;
 my @link;
@@ -20,6 +21,7 @@ GetOptions(
     "flags=s@"  => \@flags,
     "inc=s@"    => \@inc,
     "link=s@"   => \@link,
+    install     => \$install,
 ) or die usage();
 
 unless( can_run( $apxs ) ) {
@@ -36,6 +38,9 @@ push @inc, '/usr/include/apreq2';
 ### * -I to include other dirs
 
 my @cmd = ( $apxs, @flags );
+
+### By default we don't install, but with this flag we do.
+push @cmd, '-i' if $install;
 
 ### extra include dirs
 push @cmd, map { "-I $_" } $FindBin::Bin, @inc;

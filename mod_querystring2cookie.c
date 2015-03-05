@@ -29,6 +29,13 @@
 #include "http_core.h"
 #include "http_request.h"
 
+#include "http_log.h"
+#include "http_main.h"
+#include "http_protocol.h"
+#include "http_request.h"
+#include "util_script.h"
+#include "http_connection.h"
+
 #include <math.h>
 
 /* ********************************************
@@ -327,7 +334,7 @@ static int hook(request_rec *r)
 
         // XXX use a sprintf format for more flexibility?
         if( cfg->encode_in_key ) {
-            _DEBUG && fprintf( stderr, "encoding in the key\n", cookie_name );
+            _DEBUG && fprintf( stderr, "%s: encoding in the key\n", cookie_name );
 
             cookie = apr_pstrcat( r->pool,
                             // cookie data
@@ -338,7 +345,7 @@ static int hook(request_rec *r)
                             NULL
                          );
         } else {
-            _DEBUG && fprintf( stderr, "encoding in the value\n", cookie_name );
+            _DEBUG && fprintf( stderr, "%s: encoding in the value\n", cookie_name );
             cookie = apr_pstrcat( r->pool, cookie_name, "=", cookie, NULL );
 
         }
