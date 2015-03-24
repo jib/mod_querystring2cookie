@@ -73,7 +73,7 @@ directory or .htaccess sections of the configuration.
 
       qs2cookie=a|1^b|2;
 
-    But if you set this diretive to On, the query parameters will be encoded into
+    But if you set this diretive to on, the query parameters will be encoded into
     the key like this, and the value will be set to the timestamp of when the cookie
     was created:
 
