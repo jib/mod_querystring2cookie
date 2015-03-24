@@ -1,3 +1,9 @@
+libapache2-mod-querystring2cookie (1.0.2-2krux1) unstable; urgency=low
+
+  * New build to discern between debian versions
+
+ -- Krux Operations Team <ops@krux.com>  Tue, 24 Mar 2015 00:17:00 +0000
+
 libapache2-mod-querystring2cookie (1.0.2-1) unstable; urgency=low
 
   * Trusty build, quell warnings
